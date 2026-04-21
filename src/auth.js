@@ -40,13 +40,21 @@ function pruneRpmHistory(account, now) {
   return account._rpmHistory.length;
 }
 
+// Serialize concurrent saveAccounts calls — multiple async paths
+// (reportSuccess / markRateLimited / updateCapability / probe) can fire
+// together; without a mutex the last writer wins on stale memory state.
+let _saveInFlight = false;
+let _savePending = false;
 function saveAccounts() {
+  if (_saveInFlight) { _savePending = true; return; }
+  _saveInFlight = true;
   try {
     const data = accounts.map(a => ({
       id: a.id, email: a.email, apiKey: a.apiKey,
       apiServerUrl: a.apiServerUrl, method: a.method,
       status: a.status, addedAt: a.addedAt,
-      tier: a.tier, capabilities: a.capabilities, lastProbed: a.lastProbed,
+      tier: a.tier, tierManual: !!a.tierManual,
+      capabilities: a.capabilities, lastProbed: a.lastProbed,
       credits: a.credits || null,
       blockedModels: a.blockedModels || [],
       refreshToken: a.refreshToken || '',
@@ -57,6 +65,9 @@ function saveAccounts() {
     writeFileSync(ACCOUNTS_FILE, JSON.stringify(data, null, 2));
   } catch (e) {
     log.error('Failed to save accounts:', e.message);
+  } finally {
+    _saveInFlight = false;
+    if (_savePending) { _savePending = false; setImmediate(saveAccounts); }
   }
 }
 
@@ -80,6 +91,7 @@ function loadAccounts() {
         lastProbed: a.lastProbed || 0,
         credits: a.credits || null,
         blockedModels: Array.isArray(a.blockedModels) ? a.blockedModels : [],
+        tierManual: !!a.tierManual,
         userStatus: a.userStatus || null,
         userStatusLastFetched: a.userStatusLastFetched || 0,
       });

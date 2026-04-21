@@ -294,7 +294,7 @@ export async function handleChatCompletions(body) {
         const rl = await checkMessageRateLimit(acct.apiKey, px);
         if (!rl.hasCapacity) {
           log.warn(`Preflight: ${acct.email} has no capacity (remaining=${rl.messagesRemaining}), skipping`);
-          markRateLimited(acct.id, modelKey);
+          markRateLimited(acct.apiKey, 5 * 60 * 1000, modelKey);
           continue;
         }
       } catch (e) {
@@ -484,14 +484,21 @@ async function nonStreamResponse(client, id, created, model, modelKey, messages,
     // LS crash on oversized payload — gRPC surfaces this as "pending stream
     // has been canceled" within a second. Give the user an actionable hint.
     const isStreamCanceled = /pending stream has been canceled|panel state|ECONNRESET/i.test(err.message);
-    if (isStreamCanceled && _msgChars > 500_000) {
-      return {
-        status: 413,
-        body: { error: {
-          message: `请求过大（${Math.round(_msgChars / 1024)}KB 输入）导致语言服务器中断。请尝试：1) 分块发送；2) 先用摘要/summarization 预处理 PDF；3) 减少历史轮数`,
-          type: 'payload_too_large',
-        } },
-      };
+    if (isStreamCanceled) {
+      const chars = (messages || []).reduce((n, m) => {
+        const c = m?.content;
+        return n + (typeof c === 'string' ? c.length :
+          Array.isArray(c) ? c.reduce((k, p) => k + (typeof p?.text === 'string' ? p.text.length : 0), 0) : 0);
+      }, 0);
+      if (chars > 500_000) {
+        return {
+          status: 413,
+          body: { error: {
+            message: `请求过大（${Math.round(chars / 1024)}KB 输入）导致语言服务器中断。请尝试：1) 分块发送；2) 先用摘要/summarization 预处理 PDF；3) 减少历史轮数`,
+            type: 'payload_too_large',
+          } },
+        };
+      }
     }
     return {
       status: err.isModelError ? 403 : 502,
@@ -682,7 +689,7 @@ function streamResponse(id, created, model, modelKey, messages, cascadeMessages,
               const rl = await checkMessageRateLimit(acct.apiKey, px);
               if (!rl.hasCapacity) {
                 log.warn(`Preflight: ${acct.email} has no capacity (remaining=${rl.messagesRemaining}), skipping`);
-                markRateLimited(acct.id, modelKey);
+                markRateLimited(acct.apiKey, 5 * 60 * 1000, modelKey);
                 continue;
               }
             } catch (e) {
@@ -752,14 +759,12 @@ function streamResponse(id, created, model, modelKey, messages, cascadeMessages,
                 choices: [{ index: 0, delta: { role: 'assistant', content: '' }, finish_reason: null }] });
             }
             const finalReason = collectedToolCalls.length ? 'tool_calls' : 'stop';
-            const finalUsage = buildUsageBody(cascadeResult?.usage || null, messages, accText, accThinking);
+            // OpenAI spec: the finish_reason chunk carries NO usage, then a
+            // separate terminal chunk has empty choices[] + usage
+            // (stream_options.include_usage convention). Emitting usage on
+            // both made some clients double-count billing. Drop the first.
             send({ id, object: 'chat.completion.chunk', created, model,
-              choices: [{ index: 0, delta: {}, finish_reason: finalReason }],
-              usage: finalUsage });
-            // OpenAI-compat: terminal usage chunk (stream_options.include_usage
-            // convention — empty choices[] + usage). Prefer Cascade's own
-            // CortexStepMetadata.model_usage numbers when present, fall back
-            // to the local chars/4 estimator. See buildUsageBody().
+              choices: [{ index: 0, delta: {}, finish_reason: finalReason }] });
             {
               const usage = buildUsageBody(cascadeResult?.usage || null, messages, accText, accThinking);
               send({ id, object: 'chat.completion.chunk', created, model,

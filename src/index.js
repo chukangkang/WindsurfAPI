@@ -4,11 +4,19 @@ import { initAuth, isAuthenticated } from './auth.js';
 import { startLanguageServer, waitForReady, isLanguageServerRunning, stopLanguageServer } from './langserver.js';
 import { startServer } from './server.js';
 import { config, log } from './config.js';
-import { existsSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 import { execSync } from 'child_process';
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
 
 export const BRAND = 'WindsurfAPI bydwgx1337';
-export const VERSION = '1.2.0';
+// Single source of truth: package.json. Keeps banner + /health + dashboard all in sync.
+export const VERSION = (() => {
+  try {
+    const here = dirname(fileURLToPath(import.meta.url));
+    return JSON.parse(readFileSync(join(here, '..', 'package.json'), 'utf8')).version;
+  } catch { return '1.0.0'; }
+})();
 
 async function main() {
   const banner = `

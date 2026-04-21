@@ -121,7 +121,14 @@ async function route(req, res) {
     return handleDashboardApi(method, subpath, body, req, res);
   }
 
-  // ─── Auth management (no API key required) ─────────────
+  // ─── API endpoints (require API key) ────────────────────
+
+  if (!validateApiKey(extractToken(req))) {
+    return json(res, 401, { error: { message: 'Invalid API key', type: 'auth_error' } });
+  }
+
+  // ─── Auth management (admin — gated by API key above) ──
+  // Returns full apiKey strings for copy-to-clipboard. Must stay behind auth.
 
   if (path === '/auth/status') {
     return json(res, 200, { authenticated: isAuthenticated(), ...getAccountCount() });
@@ -190,12 +197,6 @@ async function route(req, res) {
       log.error('Login failed:', err.message);
       return json(res, 401, { error: err.message });
     }
-  }
-
-  // ─── API endpoints (require API key) ────────────────────
-
-  if (!validateApiKey(extractToken(req))) {
-    return json(res, 401, { error: { message: 'Invalid API key', type: 'auth_error' } });
   }
 
   if (path === '/v1/models' && method === 'GET') {
