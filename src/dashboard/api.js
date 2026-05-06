@@ -1234,6 +1234,7 @@ export async function handleDashboardApi(method, subpath, body, req, res) {
       if (!lines.length) return json(res, 400, { error: 'ERR_NO_VALID_LINES' });
 
       const results = [];
+      const existingEmails = new Set(getAccountList().map(a => a.email?.toLowerCase()).filter(Boolean));
       for (const line of lines) {
         const parts = line.split(/\s+/);
         let proxy = null, email, password;
@@ -1248,6 +1249,10 @@ export async function handleDashboardApi(method, subpath, body, req, res) {
           results.push({ success: false, email: line.slice(0, 30), error: 'ERR_FORMAT_INVALID' });
           continue;
         }
+        if (autoAdd && existingEmails.has(email.toLowerCase())) {
+          results.push({ success: false, email, error: 'ERR_ACCOUNT_ALREADY_EXISTS', skipped: true });
+          continue;
+        }
         try {
           const loginProxy = proxy ? parseProxyUrl(proxy) : getProxyConfig().global;
           const result = await processWindsurfLogin({ email, password, loginProxy, autoAdd });
@@ -1258,6 +1263,7 @@ export async function handleDashboardApi(method, subpath, body, req, res) {
               ensureLsForAccount(binding.accountId).catch(() => {});
           }
           results.push(result);
+          if (autoAdd) existingEmails.add(email.toLowerCase());
         } catch (err) {
           results.push({ success: false, email, error: err.message });
         }
